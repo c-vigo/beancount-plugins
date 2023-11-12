@@ -1,44 +1,73 @@
-Rename accounts plugin for Beancount
-------------------------------------
+## rename_accounts plugin for Beancount
 
-Plugin to rename accounts. Takes a list of account pairs to rename. Here are some
-examples where this can be useful.
+Plugin that renames accounts, given a list of account pairs to rename. This enables you
+to temporarily modify your account hierarchy.
 
-This is useful when one wants two different views (reports) into the same set of
-transactions. Renames in this plugin can be easily turned on or off (by manually
-commenting them out in your beancount plugin directive) depending on the type of
-reporting desired. Here is an example where this is useful:
+This is useful when one wants two different views (reports) into your ledger. Renames
+can be turned on or off relatively easily (by manually commenting them out in your
+Beancount plugin directive) depending on the type of reporting desired. Here is an
+example where this comes in handy:
 
-`Expenses:Taxes -> Income:Taxes`
+```
+Expenses:Taxes ---rename--> Income:Taxes
+```
 
-This rename allows taxes to avoid cluttering and dominating the Expense reports (and
-thus rendering them less useful), and simultaneously reports net (after-tax) income.
-Without the rename, of course, the view of gross income and expenses including taxes
-becomes available.
-
-Of course, the right set of queries can also give you these reports renaming. However,
-renaming allows you to take advantage of standard, built-in reporting tools. For
-example, fava's treemap/sunburst expense plots would not work out of the box on a
-custom query. Renaming solves this problem.
+Taxes are always booked as expenses. However:
+- without the rename, of course, the `Income` account is gross income, and `Expenses`
+  includes taxes
+- with the rename, the `Income` account shows the net (after-tax) income. More
+  interestingly, the renames avoids Expense reports from being cluttered and dominated
+  by taxes (thus rendering them less useful)
 
 
-Configuring
------------
+Here are a [few other examples](https://groups.google.com/g/beancount/c/ZD8701xPE3Y/m/M0mA0gb1AgAJ) from the
+Beancount mailing list where renaming accounts helps switch between a cash flow view and
+a tax view.
+
+Of course, the right set of queries can also give you these reports. However, renaming
+allows you to take advantage of standard, built-in reporting tools and UIs, which are
+far more extensive than queries. For example, Fava's UI hierarchy and associated
+visualizations (treemaps, sunburst plots, bar plots across time, changes by year, etc.)
+are not available for queries. Renaming solves this problem.
+
+
+## Configuring
 
 Example to include in your beancount file:
 
 ```python
 plugin "beancount_reds_plugins.rename_accounts.rename_accounts" "{
  'Expenses:Taxes' : 'Income:Taxes',
- 'Expenses:Employer-Paid-Benefits' : 'Income:Employer-Paid-Benefits',
+ 'Assets:House:Capital-Improvements' : 'Expenses:House:Appliances',
  }"
 ```
 
-This assumes you've checked out the repo to: `plugins/beancount_plugins_redstreet`
+The strings on the left specify substrings, which are matched against accounts. Here is
+a pseudocode example to clarify:
 
-The strings on the left are string-matched against accounts. `Expenses:Taxes:Federal`
-will be renamed to `Income:Taxes:Federal` in the example above.
+```python
+if 'Expenses:Taxes' in account:
+    account = account.replace('Expenses:Taxes', 'Income:Taxes')
+```
 
-Account opening entries will be added to beancount automatically if needed. Continuing
-the example above, an open directive will automatically be inserted for
-`Income:Taxes:Federal` if needed.
+Therefore, `Expenses:Taxes:Federal` will be renamed to `Income:Taxes:Federal` in the
+example above.
+
+Account opening entries will be added to Beancount automatically if needed (eg: for
+`Income:Taxes:Federal` above).
+
+The strings on the left may be regular expressions, in which case the strings on
+the right may contain backreferences to capturing groups. For example, the
+following configuration will rename accounts like
+`Income:Brokerage:CapitalGains:VTI` to `Assets:Brokerage:CapitalGains:VTI`. This
+prevents dividends, realized capital gains, and fees from affecting the account
+balance of `Assets:Brokerage`, revealing the net inflows into the
+`Assets:Brokerage` account:
+
+```python
+plugin "beancount_reds_plugins.rename_accounts.rename_accounts" "{
+  'Income(:.+)?:Dividends(:.+)?' : 'Assets\\\\1:Dividends\\\\2',
+  'Income(:.+)?:CapitalGains(:.+)?' : 'Assets\\\\1:CapitalGains\\\\2',
+  'Expenses(:.+)?:Fees(:.+)?' : 'Assets\\\\1:Fees\\\\2',
+}"
+```
