@@ -161,9 +161,12 @@ TODO:
 
 """
 
-import time
-from ast import literal_eval
 import datetime
+import random
+import string
+import time
+
+from ast import literal_eval
 from collections import defaultdict
 
 from beancount.core import data
@@ -172,6 +175,9 @@ from beancount_reds_plugins.common import common
 
 DEBUG = 0
 DEFAULT_TOLERANCE = 0.0099
+MATCHING_ID_STRING = "match_id"
+LINK_PREFIX = "ZeroSum."
+random.seed(6)  # arbitrary fixed seed
 
 __plugins__ = ('zerosum', 'flag_unmatched',)
 
@@ -185,6 +191,20 @@ def account_replace(txn, posting, new_account):
     txn.postings.append(new_posting)
 
 
+def metadata_update(txn, posting, match_id, matching_id_string):
+    if match_id and matching_id_string:
+        if posting.meta:
+            # Will overwrite an existing match (shouldn't exist)
+            posting.meta.update({matching_id_string: match_id})
+        else:
+            posting.meta = {matching_id_string: match_id}
+
+
+def transaction_update(txn, match_id, link_prefix):
+    if match_id and link_prefix:
+        txn.links.add(link_prefix + match_id)
+
+
 def zerosum(entries, options_map, config):  # noqa: C901
     """Insert entries for unmatched transactions in zero-sum accounts.
 
@@ -193,7 +213,7 @@ def zerosum(entries, options_map, config):  # noqa: C901
 
       options_map: a dict of options parsed from the file (not used)
 
-      config: Python dict with two entries:
+      config: Python dict with the following entries:
 
       - 'zerosum_accounts': maps zerosum_account_name -> (matched_zerosum_account_name,
         date_range). matched_zerosum_account_name is optional, and can be left blank. If
@@ -207,6 +227,16 @@ def zerosum(entries, options_map, config):  # noqa: C901
 
       - 'flag_unmatched': bool to control whether to flag unmatched
         transactions as warnings (default off)
+
+      - 'match_metadata': bool to control whether matched postings have metadata
+        linking the matched transactions, allowing manual verification in post (default off)
+
+      - 'match_metadata_name': name to use for matched posting metadata (default 'match_id')
+
+      - 'link_transactions': bool to control whether the transactions of matched postings
+        have links added, allowing manual verification in post (default off)
+
+      - 'link_prefix': prefix to use in link names (default 'ZeroSum.')
 
       See example for more info.
 
@@ -232,6 +262,11 @@ def zerosum(entries, options_map, config):  # noqa: C901
                     return (p, t)
         return None
 
+    def generate_match_id():
+        '''Generates a random string to be used as the match ID.'''
+        return ''.join(
+            random.choices(string.ascii_letters + string.digits, k=20))
+
     if DEBUG:
         # pr = cProfile.Profile()
         # pr.enable()
@@ -241,6 +276,10 @@ def zerosum(entries, options_map, config):  # noqa: C901
     zs_accounts_list = config_obj.pop('zerosum_accounts', {})
     (account_name_from, account_name_to) = config_obj.pop('account_name_replace', ('', ''))
     tolerance = config_obj.pop('tolerance', DEFAULT_TOLERANCE)
+    match_metadata = config_obj.pop('match_metadata', False)
+    match_metadata_name = config_obj.pop('match_metadata_name', MATCHING_ID_STRING)
+    link_transactions = config_obj.pop('link_transactions', False)
+    link_prefix = config_obj.pop('link_prefix', LINK_PREFIX)
 
     new_accounts = set()
     zerosum_postings_count = 0
@@ -248,8 +287,12 @@ def zerosum(entries, options_map, config):  # noqa: C901
 
     # Build zerosum_txns_all for all zs_accounts, so we iterate through entries only once (for performance)
     zerosum_txns_all = defaultdict(list)
-    for entry in entries:
+    for i, entry in enumerate(entries):
         if isinstance(entry, data.Transaction):
+            if link_transactions and type(entry.links) is frozenset:
+                entry = entry._replace(links=set(entry.links))  # unfreeze links set
+                entries[i] = entry
+
             for zs_account, _ in zs_accounts_list.items():
                 if any(posting.account == zs_account for posting in entry.postings):
                     zerosum_txns_all[zs_account].append(entry)
@@ -275,13 +318,32 @@ def zerosum(entries, options_map, config):  # noqa: C901
                             # print('Match:', txn.date, match[1].date, match[1].date - txn.date,
                             #         posting.units, posting.meta['lineno'], match[0].meta['lineno'])
                             match_count += 1
+
                             account_replace(txn,      posting,  target_account)
                             account_replace(match[1], match[0], target_account)
+
+                            match_id = generate_match_id() if match_metadata or link_transactions else None
+
+                            if match_metadata:
+                                metadata_update(txn, posting, match_id, match_metadata_name)
+                                metadata_update(match[1], match[0], match_id, match_metadata_name)
+
+                            if link_transactions:
+                                transaction_update(txn, match_id, link_prefix)
+                                transaction_update(match[1], match_id, link_prefix)
+
                             new_accounts.add(target_account)
                             reprocess = True
                             break
 
     new_open_entries = common.create_open_directives(new_accounts, entries, meta_desc='<zerosum>')
+
+    if link_transactions:
+        for i, entry in enumerate(entries):
+            if isinstance(entry, data.Transaction):
+                if len(entry.links) == 0:
+                    entries[i] = entry._replace(links=data.EMPTY_SET)
+                    # re-freeze empty sets
 
     if DEBUG:
         elapsed_time = time.time() - start_time
