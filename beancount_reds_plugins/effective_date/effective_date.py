@@ -3,9 +3,10 @@
 from ast import literal_eval
 import copy
 import datetime
-import time
-import string
 import random
+import string
+import sys
+import time
 from beancount.core import data
 from beancount_reds_plugins.common import common
 
@@ -48,7 +49,8 @@ def build_config(config):
     if config:
         holding_accts = literal_eval(config)
     if not holding_accts:
-        print("Using default config")
+        if DEBUG:
+            print("effective_date: Using default config", file=sys.stderr)
         holding_accts = {
                 'Expenses': {'earlier': 'Liabilities:Hold:Expenses', 'later': 'Assets:Hold:Expenses'},
                 'Income':   {'earlier': 'Assets:Hold:Income', 'later': 'Liabilities:Hold:Income'},
@@ -83,10 +85,10 @@ def effective_date(entries, options_map, config):
             filtered_entries.append(entry)
 
     # if DEBUG:
-    #     print("------")
+    #     print("effective_date: ------")
     #     for e in interesting_entries:
     #         printer.print_entry(e)
-    #     print("------")
+    #     print("effective_date: ------")
 
     # add a link to each effective date entry. this gets copied over to the newly created effective date
     # entries, and thus links each set of effective date entries
